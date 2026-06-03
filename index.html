@@ -156,7 +156,7 @@ function makeBunBunSVG — defined in JS below
 .unit-tab.active { background:var(--orange); color:white; border-color:var(--orange); }
 
 /* ── CHAT ── */
-.chat-messages { height:300px; overflow-y:auto; padding:10px; background:var(--card2); border-radius:14px; margin-bottom:10px; display:flex; flex-direction:column; gap:8px; scroll-behavior:smooth; }
+.chat-messages { height:420px; overflow-y:auto; padding:10px; background:var(--card2); border-radius:14px; margin-bottom:10px; display:flex; flex-direction:column; gap:8px; scroll-behavior:smooth; }
 .chat-msg { display:flex; gap:8px; align-items:flex-start; }
 .chat-msg.sophia { flex-direction:row-reverse; }
 .chat-avatar { width:34px; height:34px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:.9rem; flex-shrink:0; overflow:hidden; }
@@ -309,7 +309,7 @@ function makeBunBunSVG — defined in JS below
   .vocab-card { padding:8px; }
 
   /* Chat */
-  .chat-messages { height:220px; }
+  .chat-messages { height:340px; }
   .chat-text { max-width:88%; font-size:.82rem; }
   .starter-chips { gap:4px; }
   .starter-chip { font-size:.68rem; padding:5px 10px; }
@@ -451,7 +451,7 @@ function makeBunBunSVG — defined in JS below
       <button class="mic-btn" id="micBtn" onclick="toggleMic()" title="Speak" style="display:none;">🎤</button>
       <button class="chat-send" onclick="sendChat()">➤</button>
     </div>
-    <div style="font-size:.68rem;color:var(--muted);font-weight:700;text-align:center;margin-top:4px;" id="micHint">🎤 Mic works in Edge and Chrome on desktop</div>
+    <div style="font-size:.68rem;color:var(--muted);font-weight:700;text-align:center;margin-top:4px;display:none;" id="micHint"></div>
   </div>
 </section>
 
@@ -975,7 +975,7 @@ const FAV_REACTIONS = {
 // ═══════════════════════════════════
 // STATE
 // ═══════════════════════════════════
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.1.0';
 const VERSION_URL = 'https://medrosetta.github.io/BunBun/version.json';
 
 async function checkForUpdate() {
@@ -1080,61 +1080,104 @@ function checkBadges() {
 const TTS_WORKER = 'https://medchinese-tts.medrosettaapp.workers.dev';
 const VOICES = { cant:'zh-HK-HiuGaaiNeural', mand:'zh-CN-XiaoxiaoNeural', bb:'en-GB-MaisieNeural' };
 
-let audioCtx = null;
-let audioUnlocked = false;
+// ── Audio engine — queue + cancellation token (MedChinese pattern) ──────────
+let audioCtx        = null;
+let audioUnlocked   = false;
+let currentSource   = null;
+let currentToken    = 0;   // incremented on every new speak request
+let audioQueue      = [];  // pending {text,voice,rate,resolve,reject} items
+let isPlaying       = false;
 
 function getAudioCtx() {
-  if(!audioCtx || audioCtx.state==='closed') audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+  if(!audioCtx || audioCtx.state==='closed')
+    audioCtx = new (window.AudioContext||window.webkitAudioContext)();
   return audioCtx;
 }
 
-// Unlock AudioContext on first user tap — required for iOS
 async function unlockAudio() {
   if(audioUnlocked) return;
   try {
     const ctx = getAudioCtx();
-    // Play a silent buffer to unlock
     const buf = ctx.createBuffer(1,1,22050);
     const src = ctx.createBufferSource();
-    src.buffer = buf;
-    src.connect(ctx.destination);
-    src.start(0);
+    src.buffer=buf; src.connect(ctx.destination); src.start(0);
     await ctx.resume();
-    audioUnlocked = true;
+    audioUnlocked=true;
   } catch(e){}
 }
 
 function stopCurrentAudio() {
+  currentToken++;                          // invalidate any in-flight fetch/decode
   try { if(currentSource){ currentSource.stop(); currentSource.disconnect(); currentSource=null; } } catch(e){}
+  audioQueue=[];                           // clear pending queue
+  isPlaying=false;
 }
 
-// Returns a Promise that resolves when audio finishes playing
-async function azureSpeak(text, voiceName, rate=1.0) {
-  if(!text) return;
-  stopCurrentAudio();
+async function _playOne(text, voiceName, rate, token) {
+  // Fetch
+  let arrayBuf;
   try {
-    await unlockAudio();
     const res = await fetch(TTS_WORKER, {
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ text, voice: voiceName, rate: rate.toFixed(2) })
+      body: JSON.stringify({ text, voice:voiceName, rate:rate.toFixed(2) })
     });
-    if(!res.ok){ console.error('TTS Worker error:',res.status); return; }
-    const arrayBuf = await res.arrayBuffer();
+    if(!res.ok) throw new Error('TTS worker ' + res.status);
+    arrayBuf = await res.arrayBuffer();
+  } catch(e) { console.error('TTS fetch failed:',e); return; }
+
+  if(token !== currentToken) return;       // cancelled while fetching
+
+  // Decode
+  let audioBuf;
+  try {
     const ctx = getAudioCtx();
     if(ctx.state==='suspended') await ctx.resume();
-    const audioBuf = await ctx.decodeAudioData(arrayBuf);
-    return new Promise(resolve => {
-      stopCurrentAudio();
-      const source = ctx.createBufferSource();
-      source.buffer = audioBuf;
-      source.connect(ctx.destination);
-      source.onended = () => { currentSource=null; resolve(); };
-      source.start(0);
-      currentSource = source;
-    });
-  } catch(e){ console.error('TTS failed:',e); }
+    audioBuf = await ctx.decodeAudioData(arrayBuf);
+  } catch(e) { console.error('TTS decode failed:',e); return; }
+
+  if(token !== currentToken) return;       // cancelled while decoding
+
+  // Play
+  return new Promise(resolve => {
+    const ctx = getAudioCtx();
+    const source = ctx.createBufferSource();
+    source.buffer = audioBuf;
+    source.connect(ctx.destination);
+    source.onended = () => {
+      currentSource=null;
+      resolve();
+    };
+    source.start(0);
+    currentSource = source;
+  });
 }
+
+async function _processQueue() {
+  if(isPlaying || audioQueue.length===0) return;
+  isPlaying=true;
+  while(audioQueue.length>0) {
+    const {text,voice,rate,token,resolve} = audioQueue.shift();
+    if(token !== currentToken) { resolve(); continue; }  // skip if superseded
+    await _playOne(text, voice, rate, token);
+    resolve();
+  }
+  isPlaying=false;
+}
+
+// Public API — returns Promise that resolves when audio finishes
+function azureSpeak(text, voiceName, rate=1.0) {
+  if(!text) return Promise.resolve();
+  unlockAudio();
+  const token = currentToken;
+  return new Promise(resolve => {
+    audioQueue.push({text, voice:voiceName, rate, token, resolve});
+    _processQueue();
+  });
+}
+
+// Stop all audio immediately and clear queue
+function stopAudio() { stopAudio(); }
 
 function populateVoiceSelects() {
   // No dropdowns needed for Azure — just restore speed sliders
