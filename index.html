@@ -35,11 +35,18 @@
   --shadow-green: 0 8px 32px rgba(46,204,113,0.12);
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
+html {
+  overflow-x: hidden;
+  max-width: 100vw;
+}
 body {
   font-family: 'Nunito', sans-serif;
   background: var(--bg);
   color: var(--text);
   min-height: 100vh;
+  overflow-x: hidden;
+  max-width: 100vw;
+  position: relative;
 }
 
 /* ── HEADER ── */
@@ -90,7 +97,7 @@ nav button:hover { border-color:var(--orange); color:var(--orange); transform:tr
 nav button.active { background:linear-gradient(135deg,var(--orange),var(--pink)); color:white; border-color:transparent; box-shadow:0 4px 14px rgba(255,140,0,.35); }
 
 /* ── MAIN ── */
-main { padding:12px; max-width:720px; margin:0 auto; }
+main { padding:12px; max-width:720px; margin:0 auto; overflow-x:hidden; }
 .section { display:none; animation:fadeUp .3s ease; }
 .section.active { display:block; }
 @keyframes fadeUp { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
@@ -1132,6 +1139,19 @@ function speakCant(t){ azureSpeak(t, VOICES.cant, state.voices.cantRate||0.85); 
 function speakMand(t){ azureSpeak(t, VOICES.mand, state.voices.mandRate||0.85); }
 function speakBB(t){   azureSpeak(t, VOICES.bb,   state.voices.bbRate||0.95); }
 
+function cleanForTTS(text) {
+  return text
+    .replace(/\*[^*]+\*/g, '')           // remove *stage directions*
+    .replace(/\([a-zA-Z\d\s\u0300-\u036f]+\)/g, '') // remove (pinyin in parens)
+    .replace(/[\u4e00-\u9fff\u3400-\u4dbf]/g, '')   // remove Chinese characters
+    .replace(/[\u{1F000}-\u{1FFFF}]/gu, '')          // remove emoji (supplementary plane)
+    .replace(/[\u2600-\u27BF]/g, '')                 // remove misc symbols & dingbats
+    .replace(/[\uFE00-\uFE0F]/g, '')                 // remove variation selectors
+    .replace(/\s+/g, ' ')                            // collapse whitespace
+    .trim()
+    .substring(0, 200);
+}
+
 function audBtns(cantText, mandText, bbText) {
   let html='';
   if(cantText) html+=`<button class="aud-btn aud-cant" onclick="speakCant('${cantText.replace(/'/g,"\\'")}')">🟠 🔊</button>`;
@@ -1425,7 +1445,7 @@ function appendChatMsg(who,html,rawText) {
   if(who==='bunbun'&&rawText) {
     const chars=rawText.match(/[\u4e00-\u9fff]+/g);
     const cantText=chars?chars.slice(0,2).join(''):'';
-    audioRow=`<div class="bb-audio-row">${audBtns(cantText||null,cantText||null,rawText.replace(/[\u4e00-\u9fff]/g,'').substring(0,150))}</div>`;
+    audioRow=`<div class="bb-audio-row">${audBtns(cantText||null,cantText||null,cleanForTTS(rawText))}</div>`;
   }
   div.innerHTML=`${avatarHtml}<div class="chat-text">${html}${audioRow}</div>`;
   msgs.appendChild(div); msgs.scrollTop=msgs.scrollHeight;
