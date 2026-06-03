@@ -169,7 +169,7 @@ function makeBunBunSVG — defined in JS below
 .starter-chip { background:white; border:1.5px solid rgba(255,140,0,.25); border-radius:99px; padding:5px 12px; font-size:.72rem; font-weight:800; color:var(--orange); cursor:pointer; transition:all .18s; white-space:nowrap; }
 .starter-chip:hover { background:var(--orange); color:white; transform:translateY(-1px); }
 .chat-input-row { display:flex; gap:6px; }
-.chat-input { flex:1; background:white; border:2px solid rgba(255,140,0,.2); border-radius:99px; padding:9px 16px; font-family:'Nunito',sans-serif; font-weight:700; font-size:.86rem; color:var(--text); outline:none; transition:border-color .2s; }
+.chat-input { flex:1; background:white; border:2px solid rgba(255,140,0,.2); border-radius:99px; padding:9px 16px; font-family:'Nunito',sans-serif; font-weight:700; font-size:16px; color:var(--text); outline:none; transition:border-color .2s; }
 .chat-input:focus { border-color:var(--orange); }
 .chat-send { background:linear-gradient(135deg,var(--orange),var(--pink)); border:none; border-radius:99px; width:40px; height:40px; color:white; font-size:1rem; cursor:pointer; transition:all .2s; flex-shrink:0; display:flex; align-items:center; justify-content:center; }
 .chat-send:hover { transform:scale(1.08); }
@@ -303,9 +303,10 @@ function makeBunBunSVG — defined in JS below
   nav { padding:6px 8px; gap:5px; }
   nav button { padding:8px 11px; font-size:.7rem; }
 
-  /* Vocab */
-  .vocab-item { grid-template-columns:1fr; }
-  .vocab-char { font-size:2rem; }
+  /* Vocab — keep 2 cols on mobile so Cant/Mand are side by side */
+  .vocab-item { grid-template-columns:1fr 1fr; gap:5px; }
+  .vocab-char { font-size:1.3rem; }
+  .vocab-card { padding:8px; }
 
   /* Chat */
   .chat-messages { height:220px; }
@@ -336,6 +337,7 @@ function makeBunBunSVG — defined in JS below
 </style>
 </head>
 <body>
+<div id="updateBanner" style="display:none;background:linear-gradient(90deg,var(--orange),var(--pink));color:white;text-align:center;padding:8px 16px;font-size:.8rem;font-weight:900;cursor:pointer;"></div>
 <div class="confetti-wrap" id="confetti"></div>
 
 <header>
@@ -446,7 +448,7 @@ function makeBunBunSVG — defined in JS below
     <div class="chat-input-row">
       <input class="chat-input" id="chatInput" placeholder="Type in English, Chinese, or pinyin..."
              onkeydown="if(event.key==='Enter')sendChat()">
-      <button class="mic-btn" id="micBtn" onclick="toggleMic()" title="Speak">🎤</button>
+      <button class="mic-btn" id="micBtn" onclick="toggleMic()" title="Speak" style="display:none;">🎤</button>
       <button class="chat-send" onclick="sendChat()">➤</button>
     </div>
     <div style="font-size:.68rem;color:var(--muted);font-weight:700;text-align:center;margin-top:4px;" id="micHint">🎤 Mic works in Edge and Chrome on desktop</div>
@@ -973,6 +975,21 @@ const FAV_REACTIONS = {
 // ═══════════════════════════════════
 // STATE
 // ═══════════════════════════════════
+const APP_VERSION = '1.0.0';
+const VERSION_URL = 'https://medrosetta.github.io/BunBun/version.json';
+
+async function checkForUpdate() {
+  try {
+    const res = await fetch(VERSION_URL + '?t=' + Date.now());
+    if(!res.ok) return;
+    const data = await res.json();
+    if(data.version && data.version !== APP_VERSION) {
+      const bar = document.getElementById('updateBanner');
+      if(bar) { bar.textContent = '🥕 New version ' + data.version + ' available! Tap here to update.'; bar.style.display='block'; bar.onclick=()=>location.reload(true); }
+    }
+  } catch(e){}
+}
+
 let state = {
   carrots:0, level:1, streak:0, lastVisit:null, dailyBonusClaimed:false,
   masteredWords:{}, badges:[], favorites:[],
@@ -1064,11 +1081,27 @@ const TTS_WORKER = 'https://medchinese-tts.medrosettaapp.workers.dev';
 const VOICES = { cant:'zh-HK-HiuGaaiNeural', mand:'zh-CN-XiaoxiaoNeural', bb:'en-GB-MaisieNeural' };
 
 let audioCtx = null;
-let currentSource = null;
+let audioUnlocked = false;
 
 function getAudioCtx() {
   if(!audioCtx || audioCtx.state==='closed') audioCtx = new (window.AudioContext||window.webkitAudioContext)();
   return audioCtx;
+}
+
+// Unlock AudioContext on first user tap — required for iOS
+async function unlockAudio() {
+  if(audioUnlocked) return;
+  try {
+    const ctx = getAudioCtx();
+    // Play a silent buffer to unlock
+    const buf = ctx.createBuffer(1,1,22050);
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx.destination);
+    src.start(0);
+    await ctx.resume();
+    audioUnlocked = true;
+  } catch(e){}
 }
 
 function stopCurrentAudio() {
@@ -1080,6 +1113,7 @@ async function azureSpeak(text, voiceName, rate=1.0) {
   if(!text) return;
   stopCurrentAudio();
   try {
+    await unlockAudio();
     const res = await fetch(TTS_WORKER, {
       method:'POST',
       headers:{'Content-Type':'application/json'},
@@ -1154,9 +1188,12 @@ function cleanForTTS(text) {
 
 function audBtns(cantText, mandText, bbText) {
   let html='';
-  if(cantText) html+=`<button class="aud-btn aud-cant" onclick="speakCant('${cantText.replace(/'/g,"\\'")}')">🟠 🔊</button>`;
-  if(mandText) html+=`<button class="aud-btn aud-mand" onclick="speakMand('${mandText.replace(/'/g,"\\'")}')">🟢 🔊</button>`;
-  if(bbText)   html+=`<button class="aud-btn aud-bb"   onclick="speakBB(\`${bbText.replace(/`/g,"\\`").replace(/\\/g,'\\\\').substring(0,150)}\`)">🐰 🔊</button>`;
+  if(cantText) html+=`<button class="aud-btn aud-cant" onclick="speakCant('${cantText.replace(/'/g,"\\'")}')" >🟠 🔊</button>`;
+  if(mandText) html+=`<button class="aud-btn aud-mand" onclick="speakMand('${mandText.replace(/'/g,"\\'")}')" >🟢 🔊</button>`;
+  if(bbText) {
+    const clean=cleanForTTS(bbText);
+    html+=`<button class="aud-btn aud-bb" onclick="speakBB(\`${clean.replace(/`/g,"\\`").replace(/\\/g,'\\\\').substring(0,200)}\`)" >🐰 🔊</button>`;
+  }
   return html;
 }
 </script>
@@ -1906,6 +1943,14 @@ function confettiBurst(){
 // INIT
 // ═══════════════════════════════════
 window.addEventListener('load',()=>{
+  // Unlock AudioContext on first user interaction (required for iOS)
+  const unlockOnTouch = () => { unlockAudio(); document.removeEventListener('touchstart', unlockOnTouch); document.removeEventListener('click', unlockOnTouch); };
+  document.addEventListener('touchstart', unlockOnTouch, {once:true});
+  document.addEventListener('click', unlockOnTouch, {once:true});
+  if(!isIOS) {
+    const micBtn = document.getElementById('micBtn');
+    if(micBtn) micBtn.style.display='';
+  }
   populateVoiceSelects(); // restore speed slider values
   loadState(); updateCarrotBar(); renderHome();
 });
